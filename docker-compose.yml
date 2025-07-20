@@ -1,0 +1,45 @@
+services:
+  postgresql:
+    image: postgres:15-alpine
+    container_name: streaming-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - streaming-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  generator:
+    build: ./generator
+    container_name: streaming-generator
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      CONTENT_ROWS: ${CONTENT_ROWS}
+      EVENT_INTERVAL_SECONDS: ${EVENT_INTERVAL_SECONDS}
+      BATCH_SIZE: ${BATCH_SIZE}
+    networks:
+      - streaming-network
+
+volumes:
+  postgres_data:
+
+networks:
+  streaming-network:
+    driver: bridge
