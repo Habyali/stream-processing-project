@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "=== Stream Processing Project - Generator -> PostgreSQL ==="
+echo "=== Stream Processing Project - Distributed Streaming Pipeline ==="
 echo ""
 
 # Function to check if service is running
@@ -34,6 +34,13 @@ test_postgres() {
     fi
 }
 
+# Function to check Kafka topics
+check_kafka_topics() {
+    echo ""
+    echo "Kafka topics:"
+    docker-compose exec -T kafka kafka-topics --list --bootstrap-server localhost:9092 2>/dev/null | grep -E "(streaming|connect)" || echo "No streaming topics found yet"
+}
+
 # Main execution
 case "${1:-start}" in
     start)
@@ -42,19 +49,22 @@ case "${1:-start}" in
         
         echo ""
         echo "Waiting for services to be ready..."
-        sleep 5
-        
-        # Show PostgreSQL logs if it fails
-        if ! docker ps | grep -q "streaming-postgres"; then
-            echo ""
-            echo "PostgreSQL failed to start. Showing logs:"
-            docker-compose logs postgresql
-        fi
+        sleep 10
         
         check_service "streaming-postgres"
         check_service "streaming-generator"
+        check_service "streaming-zookeeper"
+        check_service "streaming-kafka"
+        check_service "streaming-connect"
         
         test_postgres
+        check_kafka_topics
+        
+        echo ""
+        echo "Setting up Debezium connector..."
+        sleep 5
+        chmod +x kafka/setup-connector.sh
+        ./kafka/setup-connector.sh
         
         echo ""
         echo "To view logs: docker-compose logs -f"
@@ -84,7 +94,11 @@ case "${1:-start}" in
     test)
         check_service "streaming-postgres"
         check_service "streaming-generator"
+        check_service "streaming-zookeeper"
+        check_service "streaming-kafka"
+        check_service "streaming-connect"
         test_postgres
+        check_kafka_topics
         ;;
         
     *)

@@ -1,0 +1,22 @@
+{
+  "name": "postgres-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgresql",
+    "database.port": "5432",
+    "database.user": "streaming_user",
+    "database.password": "streaming_pass",
+    "database.dbname": "streaming_db",
+    "database.server.name": "dbserver1",
+    "table.include.list": "public.engagement_events",
+    "plugin.name": "pgoutput",
+    "slot.name": "debezium_slot",
+    "publication.name": "dbz_publication",
+    "topic.prefix": "streaming",
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "drop",
+    "transforms.unwrap.add.fields": "op,table,db,ts_ms"
+  }
+}
