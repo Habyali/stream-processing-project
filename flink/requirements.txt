@@ -2,3 +2,4 @@ apache-flink==1.18.0
 apache-flink-libraries==1.18.0
 psycopg2-binary==2.9.9
 python-dotenv==1.0.0
+redis==5.0.1

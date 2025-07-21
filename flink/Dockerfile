@@ -16,7 +16,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY process_engagement.py .
+COPY *.py .
 
 # Set environment for PyFlink
 ENV FLINK_HOME=/opt/flink
