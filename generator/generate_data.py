@@ -143,15 +143,26 @@ def main():
     conn = get_db_connection()
     print("Connected to PostgreSQL")
     
-    # Generate and insert content data
-    print(f"Generating {CONTENT_ROWS} content rows...")
-    content_data = generate_content_data(CONTENT_ROWS)
-    insert_content_data(conn, content_data)
-    print(f"Inserted {len(content_data)} content rows")
+    # Check if content already exists
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM content")
+        existing_count = cur.fetchone()[0]
     
-    # Prepare content info for event generation
-    content_ids = [c['id'] for c in content_data]
-    content_info = {c['id']: c for c in content_data}
+    if existing_count == 0:
+        # Generate and insert content data
+        print(f"Generating {CONTENT_ROWS} content rows...")
+        content_data = generate_content_data(CONTENT_ROWS)
+        insert_content_data(conn, content_data)
+        print(f"Inserted {len(content_data)} content rows")
+    else:
+        print(f"Found {existing_count} existing content rows, skipping generation")
+    
+    # Get all content IDs and info
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, length_seconds FROM content")
+        rows = cur.fetchall()
+        content_ids = [row[0] for row in rows]
+        content_info = {row[0]: {'length_seconds': row[1]} for row in rows}
     
     # Generate events continuously
     print(f"Starting event generation (interval: {EVENT_INTERVAL}s, batch: {BATCH_SIZE})...")

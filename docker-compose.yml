@@ -89,6 +89,55 @@ services:
       - "8083:8083"
     networks:
       - streaming-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  flink-jobmanager:
+    image: flink:1.18-java11
+    container_name: streaming-flink-jobmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    networks:
+      - streaming-network
+
+  flink-taskmanager:
+    image: flink:1.18-java11
+    container_name: streaming-flink-taskmanager
+    depends_on:
+      - flink-jobmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    command: taskmanager
+    networks:
+      - streaming-network
+
+  flink-processor:
+    build: ./flink
+    container_name: streaming-flink-processor
+    depends_on:
+      flink-jobmanager:
+        condition: service_started
+      flink-taskmanager:
+        condition: service_started
+      kafka-connect:
+        condition: service_healthy
+      postgresql:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - streaming-network
 
 volumes:
   postgres_data:

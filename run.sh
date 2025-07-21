@@ -56,6 +56,9 @@ case "${1:-start}" in
         check_service "streaming-zookeeper"
         check_service "streaming-kafka"
         check_service "streaming-connect"
+        check_service "streaming-flink-jobmanager"
+        check_service "streaming-flink-taskmanager"
+        check_service "streaming-flink-processor"
         
         test_postgres
         check_kafka_topics

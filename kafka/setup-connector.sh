@@ -13,4 +13,4 @@ curl -X POST http://localhost:8083/connectors \
 echo ""
 echo "Checking connector status..."
 sleep 3
-curl -s http://localhost:8083/connectors/postgres-connector/status | jq .
+curl -s http://localhost:8083/connectors/postgres-engagement-connector/status | jq .
