@@ -1,5 +1,7 @@
 package com.streaming.models
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+
 //=========
 // Event Models
 
@@ -14,6 +16,7 @@ case class EngagementEvent(
   rawPayload: String
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 case class DebeziumPayload(
   id: Long,
   content_id: String,
@@ -29,6 +32,7 @@ case class DebeziumPayload(
   __ts_ms: Long
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 case class DebeziumMessage(
   payload: DebeziumPayload
 )

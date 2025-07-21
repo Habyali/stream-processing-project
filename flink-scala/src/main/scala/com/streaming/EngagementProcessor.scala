@@ -13,6 +13,7 @@ import java.sql.{Connection, DriverManager}
 import scala.collection.mutable
 import java.time.Instant
 import com.streaming.models._
+import com.streaming.redis._
 
 object EngagementProcessor {
   
@@ -25,6 +26,8 @@ object EngagementProcessor {
   val POSTGRES_DB = sys.env.getOrElse("POSTGRES_DB", "streaming_db")
   val POSTGRES_USER = sys.env.getOrElse("POSTGRES_USER", "streaming_user")
   val POSTGRES_PASSWORD = sys.env.getOrElse("POSTGRES_PASSWORD", "streaming_pass")
+  val REDIS_HOST = sys.env.getOrElse("REDIS_HOST", "redis")
+  val REDIS_PORT = sys.env.getOrElse("REDIS_PORT", "6379").toInt
   
   //=========
   // Content Cache
@@ -130,6 +133,7 @@ object EngagementProcessor {
     println("Starting Flink Engagement Processor (Scala)")
     println(s"Kafka: $KAFKA_BOOTSTRAP_SERVERS")
     println(s"PostgreSQL: $POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB")
+    println(s"Redis: $REDIS_HOST:$REDIS_PORT")
     
     // Wait for services
     println("Waiting for Kafka topic to be ready...")
@@ -166,9 +170,12 @@ object EngagementProcessor {
     // Print enriched events
     enrichedStream.print("Enriched")
     
+    // Add custom Redis sink for engagement analytics
+    enrichedStream.addSink(new EngagementRedisSink(REDIS_HOST, REDIS_PORT))
+    
     // Execute
-    println("Processing engagement stream with enrichment...")
+    println("Processing engagement stream with enrichment and Redis sink...")
     println("-" * 80)
-    env.execute("Engagement Stream Processor")
+    env.execute("Engagement Stream Processor with Redis")
   }
 }
