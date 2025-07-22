@@ -135,10 +135,10 @@ object EngagementProcessor {
   }
   
   //=========
-  // Main with Optimized DataStream API
+  // Main with DataStream API
   
   def main(args: Array[String]): Unit = {
-    println("Starting Flink Engagement Processor (Optimized DataStream API)")
+    println("Starting Flink Engagement Processor (DataStream API)")
     println(s"Kafka: $KAFKA_BOOTSTRAP_SERVERS")
     println(s"PostgreSQL: $POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB")
     println(s"Redis: $REDIS_HOST:$REDIS_PORT")
@@ -212,7 +212,7 @@ object EngagementProcessor {
       .name("Elasticsearch Analytics Sink")
       .setParallelism(ELASTICSEARCH_SINK_PARALLELISM)
     
-    println("Processing engagement stream with optimized DataStream API...")
+    println("Processing engagement stream with DataStream API...")
     println("=" * 80)
     println(s"Configuration:")
     println(s"  Total Parallelism: $FLINK_PARALLELISM")
@@ -224,6 +224,6 @@ object EngagementProcessor {
     println(s"  Checkpoint Interval: ${CHECKPOINT_INTERVAL_MS}ms")
     println("=" * 80)
     
-    env.execute("Engagement Stream Processor - Optimized DataStream API")
+    env.execute("Engagement Stream Processor - DataStream API")
   }
 }

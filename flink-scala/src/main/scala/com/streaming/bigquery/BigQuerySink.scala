@@ -11,7 +11,7 @@ import scala.collection.mutable.ArrayBuffer
 import java.util.concurrent.{Executors, ScheduledExecutorService, TimeUnit}
 
 //=========
-// Optimized BigQuery Sink for High Throughput
+// BigQuery Sink for High Throughput
 
 class BigQuerySink(
   projectId: String,

@@ -15,7 +15,7 @@ from rich.text import Text
 from rich.layout import Layout
 
 #=========
-# Test Stages (2 minutes each)
+# Test Stages 
 
 STRESS_STAGES = [
     {"name": "Baseline", "interval": 1.0, "batch_size": 100},      
