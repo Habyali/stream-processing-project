@@ -6,11 +6,14 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Riyadh
     ports:
       - "5432:5432"
     volumes:
       - ./postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql
       - postgres_data:/var/lib/postgresql/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
     healthcheck:
@@ -39,6 +42,10 @@ services:
       CONTENT_ROWS: ${CONTENT_ROWS}
       EVENT_INTERVAL_SECONDS: ${EVENT_INTERVAL_SECONDS}
       BATCH_SIZE: ${BATCH_SIZE}
+      TZ: Asia/Riyadh
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
 
@@ -48,6 +55,10 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+      TZ: Asia/Riyadh
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
 
@@ -65,8 +76,12 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      TZ: Asia/Riyadh
     ports:
       - "9092:9092"
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
 
@@ -85,8 +100,12 @@ services:
       CONFIG_STORAGE_REPLICATION_FACTOR: 1
       OFFSET_STORAGE_REPLICATION_FACTOR: 1
       STATUS_STORAGE_REPLICATION_FACTOR: 1
+      TZ: Asia/Riyadh
     ports:
       - "8083:8083"
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
     healthcheck:
@@ -100,9 +119,13 @@ services:
     container_name: streaming-flink-jobmanager
     environment:
       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - TZ=Asia/Riyadh
     ports:
       - "8081:8081"
     command: jobmanager
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
 
@@ -114,6 +137,7 @@ services:
     environment:
       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
       - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=8
+      - TZ=Asia/Riyadh
     command: taskmanager
     deploy:
       resources:
@@ -121,6 +145,9 @@ services:
           memory: 4G
         reservations:
           memory: 2G
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
 
@@ -132,6 +159,7 @@ services:
     environment:
       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
       - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=8
+      - TZ=Asia/Riyadh
     command: taskmanager
     deploy:
       resources:
@@ -139,10 +167,12 @@ services:
           memory: 4G
         reservations:
           memory: 2G
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
 
-  
   flink-processor:
     build: ./flink-scala
     container_name: streaming-flink-processor
@@ -153,29 +183,35 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      POSTGRES_HOST: ${POSTGRES_HOST}
-      POSTGRES_PORT: ${POSTGRES_PORT}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      TZ: Asia/Riyadh
     deploy:
       resources:
         limits:
           memory: 2G
         reservations:
           memory: 1G
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
 
   redis:
     image: redis:7-alpine
     container_name: streaming-redis
+    environment:
+      TZ: Asia/Riyadh
     ports:
       - "6379:6379"
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
     healthcheck:
@@ -187,10 +223,15 @@ services:
   bigquery-emulator:
     image: ghcr.io/goccy/bigquery-emulator:latest
     container_name: streaming-bigquery
-    command: ["--project=streaming_project", "--dataset=engagement_data", "--port=9050", "--grpc-port=9060"]
+    command: ["--project=streaming_project", "--dataset=engagement_data", "--database=eng.db", "--port=9050", "--grpc-port=9060"]
+    environment:
+      TZ: Asia/Riyadh
     ports:
       - "9050:9050"  # REST API
       - "9060:9060"  # gRPC
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
     healthcheck:
@@ -206,8 +247,12 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - TZ=Asia/Riyadh
     ports:
       - "9200:9200"
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
     healthcheck:
@@ -224,8 +269,12 @@ services:
         condition: service_healthy
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - TZ=Asia/Riyadh
     ports:
       - "5601:5601"
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - streaming-network
     healthcheck:
@@ -233,8 +282,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      
-    
 
 volumes:
   postgres_data:

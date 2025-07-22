@@ -50,6 +50,22 @@ object EngagementProcessor {
   val REDIS_HOST = sys.env.getOrElse("REDIS_HOST", "redis")
   val REDIS_PORT = sys.env.getOrElse("REDIS_PORT", "6379").toInt
   
+  // Performance Configuration
+  val FLINK_PARALLELISM = sys.env.getOrElse("FLINK_PARALLELISM", "12").toInt
+  val CHECKPOINT_INTERVAL_MS = sys.env.getOrElse("CHECKPOINT_INTERVAL_MS", "30000").toLong
+  val KAFKA_SOURCE_PARALLELISM = sys.env.getOrElse("KAFKA_SOURCE_PARALLELISM", "4").toInt
+  val PROCESSING_PARALLELISM = sys.env.getOrElse("PROCESSING_PARALLELISM", "8").toInt
+  val REDIS_SINK_PARALLELISM = sys.env.getOrElse("REDIS_SINK_PARALLELISM", "6").toInt
+  val BIGQUERY_SINK_PARALLELISM = sys.env.getOrElse("BIGQUERY_SINK_PARALLELISM", "3").toInt
+  val ELASTICSEARCH_SINK_PARALLELISM = sys.env.getOrElse("ELASTICSEARCH_SINK_PARALLELISM", "4").toInt
+  val MONITORING_SAMPLE_RATE = sys.env.getOrElse("MONITORING_SAMPLE_RATE", "1").toInt
+  
+  // Kafka Configuration
+  val KAFKA_FETCH_MIN_BYTES = sys.env.getOrElse("KAFKA_FETCH_MIN_BYTES", "1048576")
+  val KAFKA_FETCH_MAX_WAIT_MS = sys.env.getOrElse("KAFKA_FETCH_MAX_WAIT_MS", "500")
+  val KAFKA_MAX_PARTITION_FETCH_BYTES = sys.env.getOrElse("KAFKA_MAX_PARTITION_FETCH_BYTES", "2097152")
+  val KAFKA_RECEIVE_BUFFER_BYTES = sys.env.getOrElse("KAFKA_RECEIVE_BUFFER_BYTES", "1048576")
+  
   //=========
   // Content Cache
   
@@ -88,13 +104,8 @@ object EngagementProcessor {
   def enrichEvent(msg: DebeziumMessage): Option[EnrichedEvent] = {
     val payload = msg.payload
     
-    // Only process insert or read operations
     if (payload.__op == "r" || payload.__op == "c") {
-      
-      // Lookup content info
       val contentInfo = contentCache.get(payload.content_id)
-      
-      // Calculate engagement metrics
       val engagementSeconds = payload.duration_ms.map(_ / 1000.0)
       
       val engagementPct = for {
@@ -124,33 +135,31 @@ object EngagementProcessor {
   }
   
   //=========
-  // Main with DataStream API
+  // Main with Optimized DataStream API
   
   def main(args: Array[String]): Unit = {
-    println("Starting Flink Engagement Processor (DataStream API)")
+    println("Starting Flink Engagement Processor (Optimized DataStream API)")
     println(s"Kafka: $KAFKA_BOOTSTRAP_SERVERS")
     println(s"PostgreSQL: $POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB")
     println(s"Redis: $REDIS_HOST:$REDIS_PORT")
+    println(s"Target Throughput: 2000 events/second")
     
-    // Wait for services
-    println("Waiting for Kafka topic to be ready...")
     Thread.sleep(30000)
-    
-    // Load content data
     loadContentData()
     
-    // Set up Flink environment
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setParallelism(8)
-    env.enableCheckpointing(10000) // Enable checkpointing for exactly-once processing
+    env.setParallelism(FLINK_PARALLELISM)
+    env.enableCheckpointing(CHECKPOINT_INTERVAL_MS)
     
-    // Kafka consumer properties
     val kafkaProps = new Properties()
     kafkaProps.setProperty("bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
     kafkaProps.setProperty("group.id", "flink-datastream-processor")
     kafkaProps.setProperty("auto.offset.reset", "earliest")
+    kafkaProps.setProperty("fetch.min.bytes", KAFKA_FETCH_MIN_BYTES)
+    kafkaProps.setProperty("fetch.max.wait.ms", KAFKA_FETCH_MAX_WAIT_MS)
+    kafkaProps.setProperty("max.partition.fetch.bytes", KAFKA_MAX_PARTITION_FETCH_BYTES)
+    kafkaProps.setProperty("receive.buffer.bytes", KAFKA_RECEIVE_BUFFER_BYTES)
     
-    // Create Kafka consumer
     val kafkaConsumer = new FlinkKafkaConsumer[String](
       "streaming.public.engagement_events",
       new SimpleStringSchema(),
@@ -158,61 +167,63 @@ object EngagementProcessor {
     )
     kafkaConsumer.setStartFromEarliest()
     
-    // DataStream processing pipeline
+    //=========
+    // Processing Pipeline
+    
     val enrichedStream = env
       .addSource(kafkaConsumer)
       .name("Kafka Source")
+      .setParallelism(KAFKA_SOURCE_PARALLELISM)
       
-      // Parse JSON messages
-      .map(json => JsonParser.parseDebeziumMessage(json))
-      .name("Parse JSON")
-      
-      // Filter out failed parses
-      .filter(_.isDefined)
-      .name("Filter Valid Messages")
-      
-      // Extract parsed messages
-      .map(_.get)
-      .name("Extract Messages")
-      
-      // Enrich with content data and calculate metrics
-      .map(msg => enrichEvent(msg))
-      .name("Enrich Events")
-      
-      // Filter out non-processable events
-      .filter(_.isDefined)
-      .name("Filter Enriched Events")
-      
-      // Extract enriched events
-      .map(_.get)
-      .name("Extract Enriched Events")
+      .flatMap { json =>
+        JsonParser.parseDebeziumMessage(json).flatMap(enrichEvent)
+      }
+      .name("Parse and Enrich")
+      .setParallelism(PROCESSING_PARALLELISM)
     
-    // Output enriched events for monitoring
+    //=========
+    // Monitoring with Sampling
+    
     enrichedStream
+      .filter(_ => scala.util.Random.nextInt(100) < MONITORING_SAMPLE_RATE)
       .map(event => s"Processed: ${event.eventType} | ${event.contentType.getOrElse("?")} | " +
         s"Engagement: ${event.engagementPct.map(p => f"$p%.2f%%").getOrElse("N/A")}")
       .print("DataStream")
+      .setParallelism(1)
     
-    val partitionedStream = enrichedStream
+    //=========
+    // Independent High-Performance Sinks
+    
+    enrichedStream
       .keyBy(_.contentType.getOrElse("unknown"))
-      
-
-    // Add Redis sink for analytics
-    partitionedStream
       .addSink(new EngagementRedisSink(REDIS_HOST, REDIS_PORT))
       .name("Redis Analytics Sink")
+      .setParallelism(REDIS_SINK_PARALLELISM)
 
-    partitionedStream
+    enrichedStream
+      .keyBy(_.userId)
       .addSink(new BigQuerySink("streaming_project", "engagement_data", "events", "bigquery-emulator", 9050))
       .name("BigQuery Sink")
+      .setParallelism(BIGQUERY_SINK_PARALLELISM)
 
-    partitionedStream
+    enrichedStream
+      .keyBy(_.eventType)
       .addSink(new ElasticsearchSink("elasticsearch", 9200, "engagement-events"))
       .name("Elasticsearch Analytics Sink")
+      .setParallelism(ELASTICSEARCH_SINK_PARALLELISM)
     
-    // Execute the streaming job
-    println("Processing engagement stream with DataStream API...")
-    println("-" * 80)
-    env.execute("Engagement Stream Processor - DataStream API")
+    println("Processing engagement stream with optimized DataStream API...")
+    println("=" * 80)
+    println(s"Configuration:")
+    println(s"  Total Parallelism: $FLINK_PARALLELISM")
+    println(s"  Kafka Source: $KAFKA_SOURCE_PARALLELISM")
+    println(s"  Processing: $PROCESSING_PARALLELISM")
+    println(s"  Redis Sink: $REDIS_SINK_PARALLELISM")
+    println(s"  BigQuery Sink: $BIGQUERY_SINK_PARALLELISM")
+    println(s"  Elasticsearch Sink: $ELASTICSEARCH_SINK_PARALLELISM")
+    println(s"  Checkpoint Interval: ${CHECKPOINT_INTERVAL_MS}ms")
+    println("=" * 80)
+    
+    env.execute("Engagement Stream Processor - Optimized DataStream API")
   }
 }

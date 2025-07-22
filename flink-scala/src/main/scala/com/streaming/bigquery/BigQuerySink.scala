@@ -8,9 +8,10 @@ import java.net.{HttpURLConnection, URL}
 import java.time.{LocalDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import scala.collection.mutable.ArrayBuffer
+import java.util.concurrent.{Executors, ScheduledExecutorService, TimeUnit}
 
 //=========
-// BigQuery Emulator Sink via JSON Files
+// Optimized BigQuery Sink for High Throughput
 
 class BigQuerySink(
   projectId: String,
@@ -20,41 +21,61 @@ class BigQuerySink(
   emulatorPort: Int
 ) extends RichSinkFunction[EnrichedEvent] {
 
-  private val BATCH_SIZE = 200
-  private val FLUSH_INTERVAL_MS = 3000L
+  //=========
+  // Configuration Constants
+  
+  private val BATCH_SIZE = sys.env.getOrElse("BIGQUERY_BATCH_SIZE", "2000").toInt
+  private val FLUSH_INTERVAL_MS = sys.env.getOrElse("BIGQUERY_FLUSH_INTERVAL_MS", "30000").toLong
+  private val MAX_BUFFER_SIZE = sys.env.getOrElse("BIGQUERY_MAX_BUFFER_SIZE", "20000").toInt
+  private val CONNECTION_TIMEOUT_MS = sys.env.getOrElse("BIGQUERY_CONNECTION_TIMEOUT_MS", "5000").toInt
+  private val READ_TIMEOUT_MS = sys.env.getOrElse("BIGQUERY_READ_TIMEOUT_MS", "30000").toInt
+  
+  //=========
+  // Instance Variables
   
   @transient private var eventBuffer: ArrayBuffer[EnrichedEvent] = _
   @transient private var lastFlushTime: Long = _
   @transient private var eventCount: Long = _
   @transient private var batchCount: Long = _
+  @transient private var executor: ScheduledExecutorService = _
 
   override def open(parameters: Configuration): Unit = {
     eventBuffer = ArrayBuffer[EnrichedEvent]()
     lastFlushTime = System.currentTimeMillis()
     eventCount = 0
     batchCount = 0
+    executor = Executors.newScheduledThreadPool(2)
+    
+    executor.scheduleAtFixedRate(
+      new Runnable { def run(): Unit = flushBuffer(force = false) },
+      FLUSH_INTERVAL_MS,
+      FLUSH_INTERVAL_MS,
+      TimeUnit.MILLISECONDS
+    )
     
     println(s"BigQuery Sink opened - Target: $projectId.$datasetId.$tableId")
     println(s"Emulator: $emulatorHost:$emulatorPort")
+    println(s"Batch size: $BATCH_SIZE, flush interval: ${FLUSH_INTERVAL_MS}ms")
     
-    // Test connection to emulator
     testEmulatorConnection()
   }
 
   override def invoke(event: EnrichedEvent): Unit = {
-    eventCount += 1
-    eventBuffer += event
-    
-    if (eventCount <= 5 || eventCount % 50 == 0) {
-      println(s"BigQuery buffered event #$eventCount: ${event.eventType} | ${event.contentType.getOrElse("N/A")}")
-    }
+    synchronized {
+      if (eventBuffer.size >= MAX_BUFFER_SIZE) {
+        return
+      }
+      
+      eventCount += 1
+      eventBuffer += event
+      
+      if (eventCount <= 5 || eventCount % 100 == 0) {
+        println(s"BigQuery buffered event #$eventCount: ${event.eventType} | ${event.contentType.getOrElse("N/A")}")
+      }
 
-    val currentTime = System.currentTimeMillis()
-    val shouldFlush = eventBuffer.size >= BATCH_SIZE || 
-                     (currentTime - lastFlushTime) >= FLUSH_INTERVAL_MS
-
-    if (shouldFlush) {
-      flushToBigQuery()
+      if (eventBuffer.size >= BATCH_SIZE) {
+        flushBuffer(force = true)
+      }
     }
   }
 
@@ -63,8 +84,8 @@ class BigQuerySink(
       val url = new URL(s"http://$emulatorHost:$emulatorPort")
       val connection = url.openConnection().asInstanceOf[HttpURLConnection]
       connection.setRequestMethod("GET")
-      connection.setConnectTimeout(5000)
-      connection.setReadTimeout(5000)
+      connection.setConnectTimeout(CONNECTION_TIMEOUT_MS)
+      connection.setReadTimeout(READ_TIMEOUT_MS)
       
       val responseCode = connection.getResponseCode
       if (responseCode == 200) {
@@ -80,19 +101,34 @@ class BigQuerySink(
     }
   }
 
-  private def flushToBigQuery(): Unit = {
-    if (eventBuffer.isEmpty) return
+  private def flushBuffer(force: Boolean): Unit = {
+    val eventsToProcess = synchronized {
+      val shouldFlush = force || 
+        (System.currentTimeMillis() - lastFlushTime) > FLUSH_INTERVAL_MS
+      
+      if (shouldFlush && eventBuffer.nonEmpty) {
+        val events = eventBuffer.toList
+        eventBuffer.clear()
+        lastFlushTime = System.currentTimeMillis()
+        events
+      } else {
+        List.empty[EnrichedEvent]
+      }
+    }
+    
+    if (eventsToProcess.nonEmpty) {
+      executor.submit(new Runnable {
+        def run(): Unit = flushToBigQuery(eventsToProcess)
+      })
+    }
+  }
 
+  private def flushToBigQuery(eventsToSend: List[EnrichedEvent]): Unit = {
     batchCount += 1
-    val eventsToSend = eventBuffer.toList
-    eventBuffer.clear()
-    lastFlushTime = System.currentTimeMillis()
-
+    
     try {
-      // Create JSON payload for BigQuery emulator
       val jsonPayload = createInsertPayload(eventsToSend)
       
-      // Try HTTP insert first, fall back to file if failed
       if (!sendHttpRequest(jsonPayload)) {
         writeToFile(eventsToSend)
       }
@@ -137,7 +173,6 @@ class BigQuerySink(
 
   private def formatTimestamp(timestamp: String): String = {
     try {
-      // Try to parse and reformat timestamp
       val cleanTs = timestamp.replace("Z", "").replace("T", " ")
       if (cleanTs.contains(".")) {
         cleanTs.substring(0, cleanTs.indexOf("."))
@@ -158,8 +193,8 @@ class BigQuerySink(
       connection.setRequestMethod("POST")
       connection.setRequestProperty("Content-Type", "application/json")
       connection.setDoOutput(true)
-      connection.setConnectTimeout(5000)
-      connection.setReadTimeout(10000)
+      connection.setConnectTimeout(CONNECTION_TIMEOUT_MS)
+      connection.setReadTimeout(READ_TIMEOUT_MS)
       
       val writer = new OutputStreamWriter(connection.getOutputStream, "UTF-8")
       writer.write(jsonPayload)
@@ -223,11 +258,17 @@ class BigQuerySink(
   }
 
   override def close(): Unit = {
-    println(s"BigQuery Sink closing - processed $eventCount events in $batchCount batches")
+    flushBuffer(force = true)
     
-    if (eventBuffer.nonEmpty) {
-      println(s"Flushing final ${eventBuffer.size} events...")
-      flushToBigQuery()
+    if (executor != null) {
+      executor.shutdown()
+      try {
+        executor.awaitTermination(10, TimeUnit.SECONDS)
+      } catch {
+        case _: InterruptedException => executor.shutdownNow()
+      }
     }
+    
+    println(s"BigQuery Sink closing - processed $eventCount events in $batchCount batches")
   }
 }

@@ -7,7 +7,7 @@ echo ""
 
 reset_database() {
     echo ""
-    echo "🔄 Resetting database..."
+    echo "Resetting database..."
     
     # First, drop and recreate the Debezium publication to clear locks
     echo "Clearing Debezium locks..."
@@ -18,11 +18,21 @@ reset_database() {
     echo "Truncating engagement_events table..."
     docker-compose exec -T postgresql psql -U streaming_user -d streaming_db -c \
         "DELETE FROM engagement_events;" 2>/dev/null
+
+
+    echo "Resetting BigQuery emulator data..."
+    docker-compose stop bigquery-emulator
+    docker volume rm ${PWD##*/}_bigquery_data 2>/dev/null || true
+    docker-compose up -d bigquery-emulator
+
+    # Wait for BigQuery to restart
+    echo "Waiting for BigQuery emulator to restart..."
+    sleep 10
     
     if [ $? -eq 0 ]; then
-        echo "✅ engagement_events table reset successfully"
+        echo "engagement_events table reset successfully"
     else
-        echo "❌ Failed to reset engagement_events table"
+        echo "Failed to reset engagement_events table"
         return 1
     fi
     
@@ -32,9 +42,9 @@ reset_database() {
         "DELETE FROM content;" 2>/dev/null
     
     if [ $? -eq 0 ]; then
-        echo "✅ content table reset successfully"
+        echo "content table reset successfully"
     else
-        echo "❌ Failed to reset content table"
+        echo "Failed to reset content table"
         return 1
     fi
     
@@ -48,7 +58,7 @@ reset_database() {
     docker-compose exec -T postgresql psql -U streaming_user -d streaming_db -c \
         "CREATE PUBLICATION dbz_publication FOR TABLE engagement_events;" 2>/dev/null
     
-    echo "✅ Database reset completed"
+    echo "Database reset completed"
 }
 
 # Function to check if resetdb flag is present
@@ -168,12 +178,12 @@ create_bigquery_table() {
           }')
         
         if echo "$RESPONSE" | grep -q '"tableId":"events"'; then
-            echo "✅ Events table created successfully"
+            echo "Events table created successfully"
         else
-            echo "❌ Failed to create events table"
+            echo "Failed to create events table"
         fi
     else
-        echo "✓ Events table already exists"
+        echo "Events table already exists"
     fi
 }
 
@@ -183,12 +193,12 @@ case "${1:-start}" in
     start)
         # Check for reset flag FIRST
         if check_reset_flag "$@"; then
-            echo "🔄 Reset flag detected, starting with database reset..."
+            echo "Reset flag detected, starting with database reset..."
             RESET_AFTER_START=true
         fi
         
         echo "Starting services..."
-        docker-compose up -d --build
+        docker-compose up -d --build  --remove-orphans
         
         echo ""
         echo "Waiting for PostgreSQL to be ready..."
@@ -196,7 +206,7 @@ case "${1:-start}" in
         
         # Reset database IMMEDIATELY after PostgreSQL is ready, BEFORE generator runs
         if [ "$RESET_AFTER_START" = true ]; then
-            echo "🔄 Resetting database before any data generation..."
+            echo "Resetting database before any data generation..."
             
             # Stop generator first to prevent it from creating content
             docker-compose stop generator
@@ -205,7 +215,7 @@ case "${1:-start}" in
             reset_database
             
             # Now start fresh generator with current .env
-            echo "🔄 Starting fresh generator with current .env values..."
+            echo "Starting fresh generator with current .env values..."
             docker-compose rm -f generator
             docker-compose up -d --build generator
             
@@ -238,7 +248,23 @@ case "${1:-start}" in
         echo "To stop: ./run.sh stop"
         sleep 3
 
-        pip install -r requirements.txt >/dev/null 2>&1
+        echo ""
+        echo "Installing Python dependencies..."
+        pip install -r requirements.txt --break-system-packages >/dev/null 2>&1
+        
+        if [ $? -eq 0 ]; then
+            echo " Python dependencies installed successfully"
+        else
+            echo "Failed to install Python dependencies"
+            echo "Please run: pip install -r requirements.txt --break-system-packages >/dev/null 2>&1"
+            exit 1
+        fi
+        
+        echo ""
+        echo "To view logs: docker-compose logs -f"
+        echo "To stop: ./run.sh stop"
+        sleep 2
+
         chmod +x monitor.py
         python3 monitor.py
         ;;

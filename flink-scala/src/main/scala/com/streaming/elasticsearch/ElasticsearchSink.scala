@@ -8,9 +8,10 @@ import java.net.{HttpURLConnection, URL}
 import java.time.{LocalDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import scala.collection.mutable.ArrayBuffer
+import java.util.concurrent.{Executors, ScheduledExecutorService, TimeUnit}
 
 //=========
-// Elasticsearch Sink for Real-time Analytics
+// Elasticsearch Sink for High Throughput
 
 class ElasticsearchSink(
   elasticsearchHost: String,
@@ -18,34 +19,53 @@ class ElasticsearchSink(
   indexName: String
 ) extends RichSinkFunction[EnrichedEvent] {
 
-  private val BATCH_SIZE = 100
-  private val FLUSH_INTERVAL_MS = 2000L
+  //=========
+  // Configuration Constants
+  
+  private val BATCH_SIZE = sys.env.getOrElse("ELASTICSEARCH_BATCH_SIZE", "1000").toInt
+  private val FLUSH_INTERVAL_MS = sys.env.getOrElse("ELASTICSEARCH_FLUSH_INTERVAL_MS", "10000").toLong
+  private val MAX_BUFFER_SIZE = sys.env.getOrElse("ELASTICSEARCH_MAX_BUFFER_SIZE", "10000").toInt
+  private val CONNECTION_TIMEOUT_MS = sys.env.getOrElse("ELASTICSEARCH_CONNECTION_TIMEOUT_MS", "5000").toInt
+  private val READ_TIMEOUT_MS = sys.env.getOrElse("ELASTICSEARCH_READ_TIMEOUT_MS", "15000").toInt
+  private val INDEX_SHARDS = sys.env.getOrElse("ELASTICSEARCH_INDEX_SHARDS", "1").toInt
+  private val INDEX_REPLICAS = sys.env.getOrElse("ELASTICSEARCH_INDEX_REPLICAS", "0").toInt
+  
+  //=========
+  // Instance Variables
   
   @transient private var eventBuffer: ArrayBuffer[EnrichedEvent] = _
   @transient private var lastFlushTime: Long = _
   @transient private var eventCount: Long = _
   @transient private var batchCount: Long = _
+  @transient private var executor: ScheduledExecutorService = _
 
   override def open(parameters: Configuration): Unit = {
     eventBuffer = ArrayBuffer[EnrichedEvent]()
     lastFlushTime = System.currentTimeMillis()
     eventCount = 0
     batchCount = 0
+    executor = Executors.newScheduledThreadPool(2)
+    
+    executor.scheduleAtFixedRate(
+      new Runnable { def run(): Unit = flushBuffer(force = false) },
+      FLUSH_INTERVAL_MS,
+      FLUSH_INTERVAL_MS,
+      TimeUnit.MILLISECONDS
+    )
     
     println(s"Elasticsearch Sink opened - Target: $elasticsearchHost:$elasticsearchPort/$indexName")
+    println(s"Batch size: $BATCH_SIZE, flush interval: ${FLUSH_INTERVAL_MS}ms")
     
-    // Test connection and create index template
     testConnectionAndCreateTemplate()
   }
 
   private def testConnectionAndCreateTemplate(): Unit = {
     try {
-      // Test Elasticsearch connection
       val healthUrl = new URL(s"http://$elasticsearchHost:$elasticsearchPort/_cluster/health")
       val healthConnection = healthUrl.openConnection().asInstanceOf[HttpURLConnection]
       healthConnection.setRequestMethod("GET")
-      healthConnection.setConnectTimeout(5000)
-      healthConnection.setReadTimeout(5000)
+      healthConnection.setConnectTimeout(CONNECTION_TIMEOUT_MS)
+      healthConnection.setReadTimeout(READ_TIMEOUT_MS)
       
       val healthCode = healthConnection.getResponseCode
       if (healthCode == 200) {
@@ -76,8 +96,8 @@ class ElasticsearchSink(
         "index_patterns": ["$indexName-*"],
         "template": {
           "settings": {
-            "number_of_shards": 1,
-            "number_of_replicas": 0
+            "number_of_shards": $INDEX_SHARDS,
+            "number_of_replicas": $INDEX_REPLICAS
           },
           "mappings": {
             "properties": {
@@ -117,39 +137,55 @@ class ElasticsearchSink(
   }
 
   override def invoke(event: EnrichedEvent): Unit = {
-    eventCount += 1
-    eventBuffer += event
-    
-    if (eventCount <= 5 || eventCount % 100 == 0) {
-      println(s"Elasticsearch buffered event #$eventCount: ${event.eventType} | ${event.contentType.getOrElse("N/A")}")
-    }
+    synchronized {
+      if (eventBuffer.size >= MAX_BUFFER_SIZE) {
+        return
+      }
+      
+      eventCount += 1
+      eventBuffer += event
+      
+      if (eventCount <= 5 || eventCount % 100 == 0) {
+        println(s"Elasticsearch buffered event #$eventCount: ${event.eventType} | ${event.contentType.getOrElse("N/A")}")
+      }
 
-    val currentTime = System.currentTimeMillis()
-    val shouldFlush = eventBuffer.size >= BATCH_SIZE || 
-                     (currentTime - lastFlushTime) >= FLUSH_INTERVAL_MS
-
-    if (shouldFlush) {
-      flushToElasticsearch()
+      if (eventBuffer.size >= BATCH_SIZE) {
+        flushBuffer(force = true)
+      }
     }
   }
 
-  private def flushToElasticsearch(): Unit = {
-    if (eventBuffer.isEmpty) return
+  private def flushBuffer(force: Boolean): Unit = {
+    val eventsToProcess = synchronized {
+      val shouldFlush = force || 
+        (System.currentTimeMillis() - lastFlushTime) > FLUSH_INTERVAL_MS
+      
+      if (shouldFlush && eventBuffer.nonEmpty) {
+        val events = eventBuffer.toList
+        eventBuffer.clear()
+        lastFlushTime = System.currentTimeMillis()
+        events
+      } else {
+        List.empty[EnrichedEvent]
+      }
+    }
+    
+    if (eventsToProcess.nonEmpty) {
+      executor.submit(new Runnable {
+        def run(): Unit = flushToElasticsearch(eventsToProcess)
+      })
+    }
+  }
 
+  private def flushToElasticsearch(eventsToSend: List[EnrichedEvent]): Unit = {
     batchCount += 1
-    val eventsToSend = eventBuffer.toList
-    eventBuffer.clear()
-    lastFlushTime = System.currentTimeMillis()
 
     try {
-      // Create daily index name
       val today = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
       val indexWithDate = s"$indexName-$today"
       
-      // Create bulk request
       val bulkPayload = createBulkPayload(eventsToSend, indexWithDate)
       
-      // Send to Elasticsearch
       if (!sendBulkRequest(bulkPayload)) {
         writeToFile(eventsToSend)
       }
@@ -194,7 +230,6 @@ class ElasticsearchSink(
 
   private def formatTimestamp(timestamp: String): String = {
     try {
-      // Convert to ISO format for Elasticsearch
       val cleanTs = timestamp.replace("Z", "").replace("T", " ")
       val dateTime = if (cleanTs.contains(".")) {
         LocalDateTime.parse(cleanTs.substring(0, cleanTs.indexOf(".")), 
@@ -217,8 +252,8 @@ class ElasticsearchSink(
       connection.setRequestMethod("POST")
       connection.setRequestProperty("Content-Type", "application/x-ndjson")
       connection.setDoOutput(true)
-      connection.setConnectTimeout(5000)
-      connection.setReadTimeout(15000)
+      connection.setConnectTimeout(CONNECTION_TIMEOUT_MS)
+      connection.setReadTimeout(READ_TIMEOUT_MS)
       
       val writer = new OutputStreamWriter(connection.getOutputStream, "UTF-8")
       writer.write(bulkPayload)
@@ -231,7 +266,6 @@ class ElasticsearchSink(
         println(s"✓ Elasticsearch bulk insert successful for batch #$batchCount")
         true
       } else {
-        // Read error response
         val reader = new BufferedReader(new InputStreamReader(connection.getErrorStream))
         val errorResponse = reader.readLine()
         reader.close()
@@ -269,11 +303,17 @@ class ElasticsearchSink(
   }
 
   override def close(): Unit = {
-    println(s"Elasticsearch Sink closing - processed $eventCount events in $batchCount batches")
+    flushBuffer(force = true)
     
-    if (eventBuffer.nonEmpty) {
-      println(s"Flushing final ${eventBuffer.size} events...")
-      flushToElasticsearch()
+    if (executor != null) {
+      executor.shutdown()
+      try {
+        executor.awaitTermination(10, TimeUnit.SECONDS)
+      } catch {
+        case _: InterruptedException => executor.shutdownNow()
+      }
     }
+    
+    println(s"Elasticsearch Sink closing - processed $eventCount events in $batchCount batches")
   }
 }

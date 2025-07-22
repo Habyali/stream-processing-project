@@ -18,16 +18,27 @@ for i in {1..12}; do
         echo "✓ BigQuery emulator is ready"
         break
     else
-        echo "⏳ Waiting for BigQuery emulator... (attempt $i/12)"
+        echo "Waiting for BigQuery emulator... (attempt $i/12)"
         sleep 5
     fi
     
     if [ $i -eq 12 ]; then
-        echo "❌ BigQuery emulator failed to start"
+        echo "BigQuery emulator failed to start"
         exit 1
     fi
 done
+echo "Checking if engagement_data dataset exists..."
+DATASET_CHECK=$(curl -s "http://streaming-bigquery:9050/projects/streaming_project/datasets" | grep -o '"datasetId":"engagement_data"' || echo "")
 
+if [ -z "$DATASET_CHECK" ]; then
+    echo "Creating engagement_data dataset..."
+    curl -s -X POST "http://streaming-bigquery:9050/projects/streaming_project/datasets" \
+      -H "Content-Type: application/json" \
+      -d '{"datasetReference": {"projectId": "streaming_project", "datasetId": "engagement_data"}}'
+    echo "Dataset created"
+else
+    echo "✓ Dataset already exists"
+fi
 # Check if events table exists
 echo "Checking if events table exists..."
 TABLE_CHECK=$(curl -s "http://streaming-bigquery:9050/projects/streaming_project/datasets/engagement_data/tables" | grep -o '"tableId":"events"' || echo "")
@@ -60,9 +71,9 @@ if [ -z "$TABLE_CHECK" ]; then
       }')
     
     if echo "$RESPONSE" | grep -q '"tableId":"events"'; then
-        echo "✅ Events table created successfully"
+        echo "Events table created successfully"
     else
-        echo "❌ Failed to create events table"
+        echo "Failed to create events table"
         echo "Response: $RESPONSE"
         exit 1
     fi
@@ -70,4 +81,4 @@ else
     echo "✓ Events table already exists"
 fi
 
-echo "✅ BigQuery initialization complete"
+echo "BigQuery initialization complete"

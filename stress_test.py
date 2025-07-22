@@ -18,14 +18,14 @@ from rich.layout import Layout
 # Test Stages (2 minutes each)
 
 STRESS_STAGES = [
-    {"name": "Baseline", "interval": 1.0, "batch_size": 10},      # 10/s
-    {"name": "Low Load", "interval": 0.5, "batch_size": 50},     # 100/s  
-    {"name": "Medium Load", "interval": 0.2, "batch_size": 100}, # 500/s
-    {"name": "High Load", "interval": 0.1, "batch_size": 100},   # 1,000/s
-    {"name": "Extreme Load", "interval": 0.05, "batch_size": 100}, # 2,000/s
+    {"name": "Baseline", "interval": 1.0, "batch_size": 100},      
+    {"name": "Low Load", "interval": 0.5, "batch_size": 500},       
+    {"name": "Medium Load", "interval": 0.2, "batch_size": 500}, 
+    {"name": "High Load", "interval": 0.1, "batch_size": 500},   
+    {"name": "Extreme Load", "interval": 0.05, "batch_size": 500}, # 
 ]
 
-STAGE_DURATION = 60  # 1 minute per stage
+STAGE_DURATION = 15 
 
 #=========
 # Stress Test Engine
