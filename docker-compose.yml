@@ -113,7 +113,32 @@ services:
       - flink-jobmanager
     environment:
       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=8
     command: taskmanager
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    networks:
+      - streaming-network
+
+  flink-taskmanager-2:
+    image: flink:1.18-java11
+    container_name: streaming-flink-taskmanager-2
+    depends_on:
+      - flink-jobmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=8
+    command: taskmanager
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
     networks:
       - streaming-network
 
@@ -137,6 +162,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
     networks:
       - streaming-network
 
@@ -166,6 +197,41 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:9050/projects/streaming_project/datasets"]
       interval: 10s
       timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: streaming-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    networks:
+      - streaming-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: streaming-kibana
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    networks:
+      - streaming-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601/api/status"]
+      interval: 30s
+      timeout: 10s
       retries: 5
       
     

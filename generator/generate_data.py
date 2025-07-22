@@ -15,7 +15,11 @@ load_dotenv()
 # Configuration
 
 fake = Faker()
-CONTENT_TYPES = ['podcast', 'newsletter', 'video']
+CONTENT_TYPES = [
+    'podcast', 'newsletter', 'video', 'webinar', 'course', 'article', 
+    'ebook', 'whitepaper', 'case-study', 'tutorial', 'demo', 'interview',
+    'documentary', 'livestream', 'audiobook', 'blog-post'
+]
 EVENT_TYPES = ['play', 'pause', 'finish', 'click']
 DEVICES = ['ios', 'android', 'web-chrome', 'web-safari', 'web-firefox']
 
@@ -27,7 +31,7 @@ DB_CONFIG = {
     'password': os.getenv('POSTGRES_PASSWORD')
 }
 
-CONTENT_ROWS = int(os.getenv('CONTENT_ROWS', '1000'))
+CONTENT_ROWS = int(os.getenv('CONTENT_ROWS', '5000'))
 EVENT_INTERVAL = float(os.getenv('EVENT_INTERVAL_SECONDS', '0.5'))
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', '1'))
 
@@ -66,8 +70,11 @@ def generate_content_data(num_rows):
         slug = f"{fake.slug()}-{i}-{uuid.uuid4().hex[:8]}"
         
         length_seconds = None
-        if content_type in ['podcast', 'video']:
+        if content_type in ['podcast', 'video', 'webinar', 'course', 'tutorial', 
+                        'demo', 'interview', 'documentary', 'livestream', 'audiobook']:
             length_seconds = random.randint(60, 7200)
+        elif content_type in ['article', 'case-study', 'blog-post']:
+            length_seconds = random.randint(300, 1800)
         
         content_data.append({
             'id': str(uuid.uuid4()),

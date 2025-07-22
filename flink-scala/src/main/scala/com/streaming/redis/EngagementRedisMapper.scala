@@ -15,8 +15,8 @@ class EngagementRedisSink(redisHost: String, redisPort: Int) extends RichSinkFun
   
   // Constants
   private val WINDOW_MINUTES = 10
-  private val TTL_SECONDS = 900 // 15 minutes
-  private val UPDATE_STATS_FREQUENCY = 100 // Update aggregated stats every N events
+  private val TTL_SECONDS = 900 
+  private val UPDATE_STATS_FREQUENCY = 100 
   private val DATE_PATTERN = "yyyyMMddHHmm"
   
   // Redis key prefixes
@@ -69,7 +69,7 @@ class EngagementRedisSink(redisHost: String, redisPort: Int) extends RichSinkFun
       }
       
       // Update aggregated stats occasionally
-      if (scala.util.Random.nextInt(UPDATE_STATS_FREQUENCY) == 0) {
+      if (true) {
         updateAggregatedStats(jedis, now)
       }
       

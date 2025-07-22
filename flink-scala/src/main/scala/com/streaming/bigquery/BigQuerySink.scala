@@ -20,8 +20,8 @@ class BigQuerySink(
   emulatorPort: Int
 ) extends RichSinkFunction[EnrichedEvent] {
 
-  private val BATCH_SIZE = 50
-  private val FLUSH_INTERVAL_MS = 15000L // 15 seconds
+  private val BATCH_SIZE = 200
+  private val FLUSH_INTERVAL_MS = 3000L
   
   @transient private var eventBuffer: ArrayBuffer[EnrichedEvent] = _
   @transient private var lastFlushTime: Long = _

@@ -13,6 +13,7 @@ import java.time.Instant
 import com.streaming.models._
 import com.streaming.redis._
 import com.streaming.bigquery._
+import com.streaming.elasticsearch._
 
 //=========
 // JSON Parser Object
@@ -140,7 +141,7 @@ object EngagementProcessor {
     
     // Set up Flink environment
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setParallelism(1)
+    env.setParallelism(8)
     env.enableCheckpointing(10000) // Enable checkpointing for exactly-once processing
     
     // Kafka consumer properties
@@ -192,14 +193,22 @@ object EngagementProcessor {
         s"Engagement: ${event.engagementPct.map(p => f"$p%.2f%%").getOrElse("N/A")}")
       .print("DataStream")
     
+    val partitionedStream = enrichedStream
+      .keyBy(_.contentType.getOrElse("unknown"))
+      
+
     // Add Redis sink for analytics
-    enrichedStream
+    partitionedStream
       .addSink(new EngagementRedisSink(REDIS_HOST, REDIS_PORT))
       .name("Redis Analytics Sink")
 
-    enrichedStream
+    partitionedStream
       .addSink(new BigQuerySink("streaming_project", "engagement_data", "events", "bigquery-emulator", 9050))
       .name("BigQuery Sink")
+
+    partitionedStream
+      .addSink(new ElasticsearchSink("elasticsearch", 9200, "engagement-events"))
+      .name("Elasticsearch Analytics Sink")
     
     // Execute the streaming job
     println("Processing engagement stream with DataStream API...")
