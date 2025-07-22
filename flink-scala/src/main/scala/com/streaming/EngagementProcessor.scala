@@ -4,8 +4,6 @@ import org.apache.flink.streaming.api.scala._
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer
 import org.apache.flink.api.common.serialization.SimpleStringSchema
-import org.apache.flink.streaming.api.functions.ProcessFunction
-import org.apache.flink.util.Collector
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.scala.DefaultScalaModule
 import java.util.Properties
@@ -14,6 +12,28 @@ import scala.collection.mutable
 import java.time.Instant
 import com.streaming.models._
 import com.streaming.redis._
+import com.streaming.bigquery._
+
+//=========
+// JSON Parser Object
+
+object JsonParser extends Serializable {
+  @transient lazy val objectMapper = {
+    val mapper = new ObjectMapper()
+    mapper.registerModule(DefaultScalaModule)
+    mapper
+  }
+  
+  def parseDebeziumMessage(json: String): Option[DebeziumMessage] = {
+    try {
+      Some(objectMapper.readValue(json, classOf[DebeziumMessage]))
+    } catch {
+      case e: Exception =>
+        println(s"Failed to parse JSON: ${e.getMessage}")
+        None
+    }
+  }
+}
 
 object EngagementProcessor {
   
@@ -62,75 +82,51 @@ object EngagementProcessor {
   }
   
   //=========
-  // JSON Parsing
+  // Enrichment Functions using DataStream API
   
-  val objectMapper = new ObjectMapper()
-  objectMapper.registerModule(DefaultScalaModule)
-  
-  def parseDebeziumMessage(json: String): Option[DebeziumMessage] = {
-    try {
-      Some(objectMapper.readValue(json, classOf[DebeziumMessage]))
-    } catch {
-      case e: Exception =>
-        println(s"Failed to parse JSON: ${e.getMessage}")
-        None
-    }
-  }
-  
-  //=========
-  // Enrichment Process Function
-  
-  class EnrichmentProcessFunction extends ProcessFunction[DebeziumMessage, EnrichedEvent] {
+  def enrichEvent(msg: DebeziumMessage): Option[EnrichedEvent] = {
+    val payload = msg.payload
     
-    override def processElement(
-      msg: DebeziumMessage,
-      ctx: ProcessFunction[DebeziumMessage, EnrichedEvent]#Context,
-      out: Collector[EnrichedEvent]
-    ): Unit = {
+    // Only process insert or read operations
+    if (payload.__op == "r" || payload.__op == "c") {
       
-      val payload = msg.payload
+      // Lookup content info
+      val contentInfo = contentCache.get(payload.content_id)
       
-      // Only process insert or read operations
-      if (payload.__op == "r" || payload.__op == "c") {
-        
-        // Lookup content info
-        val contentInfo = contentCache.get(payload.content_id)
-        
-        // Calculate engagement metrics
-        val engagementSeconds = payload.duration_ms.map(_ / 1000.0)
-        
-        val engagementPct = for {
-          durMs <- payload.duration_ms
-          info <- contentInfo
-          lengthSec <- info.lengthSeconds
-          if lengthSec > 0
-        } yield Math.round((durMs / 1000.0 / lengthSec) * 100 * 100) / 100.0
-        
-        val enrichedEvent = EnrichedEvent(
-          id = payload.id,
-          contentId = payload.content_id,
-          userId = payload.user_id,
-          eventType = payload.event_type,
-          eventTs = payload.event_ts,
-          device = payload.device,
-          contentType = contentInfo.map(_.contentType),
-          lengthSeconds = contentInfo.flatMap(_.lengthSeconds),
-          durationMs = payload.duration_ms,
-          engagementSeconds = engagementSeconds,
-          engagementPct = engagementPct,
-          processingTime = Instant.now().toString
-        )
-        
-        out.collect(enrichedEvent)
-      }
+      // Calculate engagement metrics
+      val engagementSeconds = payload.duration_ms.map(_ / 1000.0)
+      
+      val engagementPct = for {
+        durMs <- payload.duration_ms
+        info <- contentInfo
+        lengthSec <- info.lengthSeconds
+        if lengthSec > 0
+      } yield Math.round((durMs / 1000.0 / lengthSec) * 100 * 100) / 100.0
+      
+      Some(EnrichedEvent(
+        id = payload.id,
+        contentId = payload.content_id,
+        userId = payload.user_id,
+        eventType = payload.event_type,
+        eventTs = payload.event_ts,
+        device = payload.device,
+        contentType = contentInfo.map(_.contentType),
+        lengthSeconds = contentInfo.flatMap(_.lengthSeconds),
+        durationMs = payload.duration_ms,
+        engagementSeconds = engagementSeconds,
+        engagementPct = engagementPct,
+        processingTime = Instant.now().toString
+      ))
+    } else {
+      None
     }
   }
   
   //=========
-  // Main
+  // Main with DataStream API
   
   def main(args: Array[String]): Unit = {
-    println("Starting Flink Engagement Processor (Scala)")
+    println("Starting Flink Engagement Processor (DataStream API)")
     println(s"Kafka: $KAFKA_BOOTSTRAP_SERVERS")
     println(s"PostgreSQL: $POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB")
     println(s"Redis: $REDIS_HOST:$REDIS_PORT")
@@ -145,11 +141,13 @@ object EngagementProcessor {
     // Set up Flink environment
     val env = StreamExecutionEnvironment.getExecutionEnvironment
     env.setParallelism(1)
+    env.enableCheckpointing(10000) // Enable checkpointing for exactly-once processing
     
     // Kafka consumer properties
     val kafkaProps = new Properties()
     kafkaProps.setProperty("bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
-    kafkaProps.setProperty("group.id", "flink-scala-processor")
+    kafkaProps.setProperty("group.id", "flink-datastream-processor")
+    kafkaProps.setProperty("auto.offset.reset", "earliest")
     
     // Create Kafka consumer
     val kafkaConsumer = new FlinkKafkaConsumer[String](
@@ -159,23 +157,53 @@ object EngagementProcessor {
     )
     kafkaConsumer.setStartFromEarliest()
     
-    // Process stream
+    // DataStream processing pipeline
     val enrichedStream = env
       .addSource(kafkaConsumer)
-      .map(json => parseDebeziumMessage(json))
+      .name("Kafka Source")
+      
+      // Parse JSON messages
+      .map(json => JsonParser.parseDebeziumMessage(json))
+      .name("Parse JSON")
+      
+      // Filter out failed parses
       .filter(_.isDefined)
+      .name("Filter Valid Messages")
+      
+      // Extract parsed messages
       .map(_.get)
-      .process(new EnrichmentProcessFunction)
+      .name("Extract Messages")
+      
+      // Enrich with content data and calculate metrics
+      .map(msg => enrichEvent(msg))
+      .name("Enrich Events")
+      
+      // Filter out non-processable events
+      .filter(_.isDefined)
+      .name("Filter Enriched Events")
+      
+      // Extract enriched events
+      .map(_.get)
+      .name("Extract Enriched Events")
     
-    // Print enriched events
-    enrichedStream.print("Enriched")
+    // Output enriched events for monitoring
+    enrichedStream
+      .map(event => s"Processed: ${event.eventType} | ${event.contentType.getOrElse("?")} | " +
+        s"Engagement: ${event.engagementPct.map(p => f"$p%.2f%%").getOrElse("N/A")}")
+      .print("DataStream")
     
-    // Add custom Redis sink for engagement analytics
-    enrichedStream.addSink(new EngagementRedisSink(REDIS_HOST, REDIS_PORT))
+    // Add Redis sink for analytics
+    enrichedStream
+      .addSink(new EngagementRedisSink(REDIS_HOST, REDIS_PORT))
+      .name("Redis Analytics Sink")
+
+    enrichedStream
+      .addSink(new BigQuerySink("streaming_project", "engagement_data", "events", "bigquery-emulator", 9050))
+      .name("BigQuery Sink")
     
-    // Execute
-    println("Processing engagement stream with enrichment and Redis sink...")
+    // Execute the streaming job
+    println("Processing engagement stream with DataStream API...")
     println("-" * 80)
-    env.execute("Engagement Stream Processor with Redis")
+    env.execute("Engagement Stream Processor - DataStream API")
   }
 }

@@ -117,35 +117,10 @@ services:
     networks:
       - streaming-network
 
+  
   flink-processor:
-    build: ./flink
-    container_name: streaming-flink-processor
-    depends_on:
-      flink-jobmanager:
-        condition: service_started
-      flink-taskmanager:
-        condition: service_started
-      kafka-connect:
-        condition: service_healthy
-      postgresql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      POSTGRES_HOST: ${POSTGRES_HOST}
-      POSTGRES_PORT: ${POSTGRES_PORT}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-    networks:
-      - streaming-network
-
-  flink-scala-processor:
     build: ./flink-scala
-    container_name: streaming-flink-scala-processor
+    container_name: streaming-flink-processor
     depends_on:
       kafka-connect:
         condition: service_healthy
@@ -177,9 +152,27 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+  
+  bigquery-emulator:
+    image: ghcr.io/goccy/bigquery-emulator:latest
+    container_name: streaming-bigquery
+    command: ["--project=streaming_project", "--dataset=engagement_data", "--port=9050", "--grpc-port=9060"]
+    ports:
+      - "9050:9050"  # REST API
+      - "9060:9060"  # gRPC
+    networks:
+      - streaming-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9050/projects/streaming_project/datasets"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      
+    
 
 volumes:
   postgres_data:
+  arrow_data: 
 
 networks:
   streaming-network:
