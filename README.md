@@ -159,7 +159,5 @@ After changing `.env` values, restart the pipeline:
 
 - **Exactly-once processing** with Flink checkpointing
 - **Sub-second latency** for Redis updates
-- **Automatic failover** and backpressure handling
 - **Multi-sink fan-out** with independent scaling
 - **Real-time analytics** with 10-minute sliding windows
-- **Load testing** capabilities with configurable stress patterns
