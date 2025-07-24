@@ -75,7 +75,7 @@ ELASTICSEARCH_SINK_PARALLELISM=4 # Medium sink
 - **Buffered batching** for efficiency
 - **Independent failure handling** per sink
 
-###Sampling for Monitoring
+### Sampling for Monitoring
 ```scala
 .filter(_ => scala.util.Random.nextInt(100) < MONITORING_SAMPLE_RATE)
 ```
